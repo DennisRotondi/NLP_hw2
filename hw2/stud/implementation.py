@@ -64,6 +64,7 @@ class Baseline(Model):
 
     def predict(self, sentence):
         predicate_identification = []
+        print(sentence)
         for pos in sentence["pos_tags"]:
             prob = self.baselines["predicate_identification"].get(pos, dict()).get(
                 "positive", 0
