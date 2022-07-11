@@ -1,27 +1,28 @@
 import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader, Dataset
-from typing import Tuple, List, Any, Dict
+from typing import Tuple, List, Any, Dict, Optional
 from torch.nn.utils.rnn import pad_sequence
 from transformers import AutoTokenizer
 import numpy as np
+
 class Dataset_SRL_34(Dataset):
     def __init__(self, sentences: Dict[str, List[str]], need_train: bool):
         # if the dataset is for a model that need_train we assume to have labels
         self.has_labels = need_train 
         if self.has_labels:
             # with this function we create a dict to encode and decode easily labels of roles
-            self.create_labels_id_mapping_roles()
+            self.labels_to_id, self.id_to_labels = Dataset_SRL_34.create_labels_id_mapping_roles()
         self.data = self.make_data(sentences)
 
-    def create_labels_id_mapping_roles(self):
+    @staticmethod
+    def create_labels_id_mapping_roles():
         # these labels have been extracted studying the dataset from the notebook
         labels = ['agent', 'theme', 'beneficiary', 'patient', 'topic', 'goal', 'recipient', 
             'co-theme', 'result', 'stimulus', 'experiencer', 'destination', 'value', 'attribute', 
             'location', 'source', 'cause', 'co-agent', 'time', 'co-patient', 'product', 'purpose', 
             'instrument', 'extent', 'asset', 'material', '_']
-        self.labels_to_id = {lab: i for i, lab in enumerate(labels)}
-        self.id_to_labels = {i: lab for i, lab in enumerate(labels)}
+        return {lab: i for i, lab in enumerate(labels)}, {i: lab for i, lab in enumerate(labels)}
 
     def make_data(self, sentences):
         data = list() 
@@ -32,9 +33,6 @@ class Dataset_SRL_34(Dataset):
             s_length = len(sentence)
             for predicate_position in predicate_positions:
                 item = dict()
-                item["id"] = j
-                item["len"] = s_length
-
                 # here I build a tuple to attain the same input as proposed by "Shi - Lin 19" after the embedding
                 # I have also added the predicate disambiguation of that value to check if it's possible to improve the result.
                 item["input"] = (sentence, [sentence[predicate_position],sentences[ids]["predicates"][predicate_position]])
@@ -68,7 +66,7 @@ class SRL_DataModule(pl.LightningDataModule):
         assert(task in ["1234", "234", "34"])
         self.task = task
 
-    def setup(self) -> None:
+    def setup(self, stage: Optional[str] = None) -> None:
         if self.task == "34":
             DATASET = Dataset_SRL_34
         # elif self.task == "234":
@@ -78,9 +76,6 @@ class SRL_DataModule(pl.LightningDataModule):
         self.data_train = DATASET(self.sentences, self.hparams.need_train)
         if self.sentences_test: 
             self.data_test = DATASET(self.sentences_test, self.hparams.need_train)
-        # now we free up space
-        delattr(self, "sentences")
-        delattr(self, "sentences_test")
 
     def train_dataloader(self):
         return DataLoader(
@@ -89,6 +84,7 @@ class SRL_DataModule(pl.LightningDataModule):
                 shuffle = self.hparams.need_train, # if we need train we shuffle it
                 num_workers = self.hparams.n_cpu,
                 collate_fn = self.collate_fn,
+                pin_memory = True,
                 persistent_workers = True
             )
 
@@ -99,6 +95,7 @@ class SRL_DataModule(pl.LightningDataModule):
                 shuffle = False,
                 num_workers = self.hparams.n_cpu,
                 collate_fn = self.collate_fn,
+                pin_memory = True,
                 persistent_workers = True
             )
     # here we define our collate function to apply the padding
@@ -112,14 +109,10 @@ class SRL_DataModule(pl.LightningDataModule):
             # We use this argument because the texts in our dataset are lists of words.
             is_split_into_words=True,
         )
-        ids = list()
+        # ids = list()
         word_ids = list()
         labels = list()
-        lens = list()
         for i, sentence in enumerate(batch):
-            ids.append(sentence["id"])
-            lens.append(sentence["len"])
-
             w_id = np.array(batch_out.word_ids(batch_index=i), dtype=np.float64)
             # since w_id contains None values we want to remove them to have the conversion in tensor
             # we'll do so by creating a "special_token index" that is +1 higher than the last word token
@@ -137,7 +130,6 @@ class SRL_DataModule(pl.LightningDataModule):
                 batch_first=True,
                 padding_value=-100
             )
-        batch_out["id"] = torch.as_tensor(ids)
         # np conversion of the list to speedup the tensor creation
         batch_out["word_id"] = torch.as_tensor(np.array(word_ids), dtype=torch.long) 
         batch_out["labels"] = torch.as_tensor(labels)
