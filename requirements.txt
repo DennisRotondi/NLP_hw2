@@ -12,5 +12,8 @@ setuptools==59.5.0
 mergedeep # this is needed to merge dicts (of labels and sentences, just to avoid cumbersone code)
 transformers_embedder # from Riccardo Orlando
 wandb
+seqeval==1.2.2
+nltk
+matplotlib
 # package location
 --find-links https://download.pytorch.org/whl/torch_stable.html

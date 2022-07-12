@@ -4,7 +4,6 @@ import random
 import numpy as np
 from typing import List, Tuple, Dict, Optional
 from model import Model
-from tqdm import tqdm
 import dataclasses
 from dataclasses import dataclass, asdict
 from transformers import AutoModel
@@ -15,6 +14,8 @@ from torch import nn, optim
 import torch.nn.functional as F
 import pytorch_lightning as pl
 from transformers import AutoTokenizer
+from utils import evaluate_predicate_disambiguation, evaluate_predicate_identification
+from utils import evaluate_argument_classification, evaluate_argument_identification
 # all "package relative imports" here, to avoid repeat code in the notebook as I did for hw1
 try:
     from .datasets_srl import Dataset_SRL_34  # NOTE: relative import to work with docker
@@ -78,11 +79,11 @@ class HParams():
     lr: int = 1e-3
     wd: int = 0
     embedding_dim: int = 768
-    hidden_dim: int = 512
+    hidden_dim: int = 400
     bidirectional: bool = True 
     num_layers: int = 1
     dropout: float = 0.3
-    trainable_embeddings: bool = False 
+    trainable_embeddings: bool = True 
     role_classes: int = 27 # number of different SRL roles for this homework
     srl_34_ckpt: str = "model/srl_34_EN.ckpt"
 
@@ -150,9 +151,12 @@ class SRL_34(pl.LightningModule):
         super(SRL_34, self).__init__()
         self.save_hyperparameters(hparams)
         self.transformer_model = AutoModel.from_pretrained("bert-base-uncased", output_hidden_states=True)
-        if not self.hparams.trainable_embeddings:
-            for param in self.transformer_model.parameters():
-                param.requires_grad = False
+        for param in self.transformer_model.parameters():
+            param.requires_grad = False
+        if self.hparams.trainable_embeddings:
+            for param in self.transformer_model.encoder.layer[11].parameters():
+                param.requires_grad = True
+        
         if sentences_for_evaluation is not None:
             self.sentences_for_evaluation = sentences_for_evaluation
         self.lstm = nn.LSTM(self.hparams.embedding_dim, self.hparams.hidden_dim, 
@@ -214,16 +218,16 @@ class SRL_34(pl.LightningModule):
 
     def validation_epoch_end(self, outputs: List[Dict[str, torch.Tensor]]):
         avg_loss = torch.stack([x["loss_val"] for x in outputs]).mean()
-        # predict = self.predict(self.sentences_for_evaluation, require_ids=True)
-        # eac = evaluate_argument_classification(self.sentences_for_evaluation, predict)
-        # eai = evaluate_argument_identification(self.sentences_for_evaluation, predict)
-        # dict_ai = dict()
-        # dict_ac = dict()
-        # for key in eai:
-        #     dict_ai[key+"_ai"] = float(eai[key])
-        #     dict_ac[key] = float(eac[key])
-        # self.log_dict(dict_ai)
-        # self.log_dict(dict_ac)
+        predict = self.predict(self.sentences_for_evaluation, require_ids=True)
+        eac = evaluate_argument_classification(self.sentences_for_evaluation, predict)
+        eai = evaluate_argument_identification(self.sentences_for_evaluation, predict)
+        dict_ai = dict()
+        dict_ac = dict()
+        for key in eai:
+            dict_ai[key+"_ai"] = float(eai[key])
+            dict_ac[key] = float(eac[key])
+        self.log_dict(dict_ai)
+        self.log_dict(dict_ac)
         self.log_dict({"avg_val_loss": avg_loss})
         return {"avg_val_loss": avg_loss}
 
@@ -285,7 +289,7 @@ class SRL_34(pl.LightningModule):
             if not require_ids:
                 return predict_roles(self, sentences)
             predictions = dict()
-            for id in tqdm(sentences):
+            for id in sentences:
                 predictions[id] = predict_roles(self, sentences[id])
             return predictions
 

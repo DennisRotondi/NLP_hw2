@@ -153,3 +153,5 @@ static
 .idea
 *.iml
 data-secret
+
+*wandb*
