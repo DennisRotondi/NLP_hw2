@@ -80,8 +80,8 @@ class HParams():
     embedding_dim: int = 768
     hidden_dim: int = 512
     bidirectional: bool = True 
-    num_layers: int = 2
-    dropout: float = 0.2
+    num_layers: int = 1
+    dropout: float = 0.3
     trainable_embeddings: bool = False 
     role_classes: int = 27 # number of different SRL roles for this homework
     srl_34_ckpt: str = "model/srl_34_EN.ckpt"
@@ -214,7 +214,16 @@ class SRL_34(pl.LightningModule):
 
     def validation_epoch_end(self, outputs: List[Dict[str, torch.Tensor]]):
         avg_loss = torch.stack([x["loss_val"] for x in outputs]).mean()
-        predict = model.predict(sentences_, require_ids=True)
+        # predict = self.predict(self.sentences_for_evaluation, require_ids=True)
+        # eac = evaluate_argument_classification(self.sentences_for_evaluation, predict)
+        # eai = evaluate_argument_identification(self.sentences_for_evaluation, predict)
+        # dict_ai = dict()
+        # dict_ac = dict()
+        # for key in eai:
+        #     dict_ai[key+"_ai"] = float(eai[key])
+        #     dict_ac[key] = float(eac[key])
+        # self.log_dict(dict_ai)
+        # self.log_dict(dict_ac)
         self.log_dict({"avg_val_loss": avg_loss})
         return {"avg_val_loss": avg_loss}
 
@@ -256,7 +265,6 @@ class SRL_34(pl.LightningModule):
             special_idx = np.nanmax(w_id) + 1
             w_id[np.isnan(w_id)] = special_idx
             w_id[batch_out["token_type_ids"][0]] = special_idx
-            print(w_id)
             batch_out["word_id"] = torch.as_tensor(np.array([w_id]), dtype=torch.long) 
             return batch_out
         
