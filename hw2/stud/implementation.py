@@ -209,7 +209,7 @@ class SRL_34(pl.LightningModule):
         labels = labels.view(-1)
         CE = F.cross_entropy(predictions, labels, ignore_index = -100)
 
-        mask = labels == -100
+        mask = labels != -100
         identification = identification.view(-1)
         predicate_labels = (labels[mask] != self.hparams.role_classes-1).float() #26 is the label of "_"
         BCE = F.binary_cross_entropy(torch.sigmoid(identification[mask]), predicate_labels)
@@ -325,7 +325,7 @@ class SRL_1234(pl.LightningModule):
         pt_emb_dim = self.hparams.pos_tag_emb_dim
         self.pt_embed = nn.Embedding(n_pt, pt_emb_dim, padding_idx=self.hparams.pos_tag_tokens)
         self.dropout = nn.Dropout(self.hparams.dropout)
-        self.classifier = nn.Linear(self.hparams.embedding_dim + pt_emb_dim, 1)
+        self.classifier = nn.Linear(self.hparams.embedding_dim+pt_emb_dim, 1)
         # the tokenizer here is useful to speedup the prediction process!
         self.tokenizer = tre.Tokenizer(self.hparams.language_model_name)
 
@@ -333,8 +333,8 @@ class SRL_1234(pl.LightningModule):
         transformers_outputs = self.transformer_model(**input)
         w_embeddings = transformers_outputs.word_embeddings[:,1:-1,:] 
         pt_embeddings = self.pt_embed(input["pos_tags"])
-    
         embeddings = torch.cat((w_embeddings, pt_embeddings), dim=-1)
+        # embeddings = w_embeddings + pt_embeddings another experiment
         de = self.dropout(embeddings)
         return torch.sigmoid(self.classifier(de))
 
@@ -353,10 +353,9 @@ class SRL_1234(pl.LightningModule):
     def loss_function(self, predictions, labels, ignore_index = -100):
         predictions = predictions.view(-1)
         labels = labels.view(-1)
-        mask = labels == ignore_index
-        prediction(predictions[mask])
-        MSE = F.mse_loss(predictions[mask], labels[mask].float())
-        return {"loss": MSE}
+        mask = labels != ignore_index
+        BCE = F.binary_cross_entropy(predictions[mask], labels[mask].float())
+        return {"loss": BCE}
 
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx) -> Dict[str, torch.Tensor]:
         output = self(batch)
