@@ -75,7 +75,7 @@ def build_model_1234(language: str, device: str) -> Model:
 class HParams():
     # dataset stuff
     need_train: bool = True
-    batch_size: int = 256
+    batch_size: int = 128 #128 for 1234, 256 for 34
     n_cpu: int = 8
     role_classes: int = 27 # number of different SRL roles for this homework
     pos_tag_tokens: int = 17
@@ -325,9 +325,16 @@ class SRL_1234(pl.LightningModule):
         pt_emb_dim = self.hparams.pos_tag_emb_dim
         self.pt_embed = nn.Embedding(n_pt, pt_emb_dim, padding_idx=self.hparams.pos_tag_tokens)
         self.dropout = nn.Dropout(self.hparams.dropout)
-        self.classifier = nn.Linear(self.hparams.embedding_dim+pt_emb_dim, 1)
+        self.gru = nn.GRU(self.hparams.embedding_dim+pt_emb_dim, self.hparams.hidden_dim, 
+                            bidirectional=self.hparams.bidirectional,
+                            num_layers=self.hparams.num_layers, 
+                            dropout = self.hparams.dropout if self.hparams.num_layers > 1 else 0,
+                            batch_first=True)
+        gru_output_dim = self.hparams.hidden_dim if self.hparams.bidirectional is False else self.hparams.hidden_dim * 2
+        self.classifier = nn.Linear(gru_output_dim, 1)
         # the tokenizer here is useful to speedup the prediction process!
         self.tokenizer = tre.Tokenizer(self.hparams.language_model_name)
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, input: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         transformers_outputs = self.transformer_model(**input)
@@ -335,8 +342,9 @@ class SRL_1234(pl.LightningModule):
         pt_embeddings = self.pt_embed(input["pos_tags"])
         embeddings = torch.cat((w_embeddings, pt_embeddings), dim=-1)
         # embeddings = w_embeddings + pt_embeddings another experiment
-        de = self.dropout(embeddings)
-        return torch.sigmoid(self.classifier(de))
+        # de = self.dropout(embeddings)
+        o2, _ = self.gru(embeddings)
+        return self.sigmoid(self.classifier(o2))
 
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr, betas=(0.9, 0.999), eps=1e-6, weight_decay=self.hparams.wd)
@@ -354,6 +362,8 @@ class SRL_1234(pl.LightningModule):
         predictions = predictions.view(-1)
         labels = labels.view(-1)
         mask = labels != ignore_index
+        # print(predictions[mask].shape)
+        # print(labels[mask].float().shape)
         BCE = F.binary_cross_entropy(predictions[mask], labels[mask].float())
         return {"loss": BCE}
 
@@ -434,7 +444,7 @@ class SRL_1234(pl.LightningModule):
             predict = dict()
             input = encode_sentence(self, sentence).to(self.device)
             output = self(input)
-            predict["predicates"] = torch.round(output)[0].tolist()
+            predict["predicates"] = torch.round(output).view(-1).int().tolist()
             if not training:
                 a = None
             else:
@@ -453,4 +463,3 @@ class SRL_1234(pl.LightningModule):
             for id in sentences:
                 predictions[id] = predict_roles(self, sentences[id], training)
             return predictions
-        return {}
