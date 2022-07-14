@@ -8,8 +8,16 @@ import transformers_embedder as tre
 import numpy as np
 import spacy
 from spacy.tokens import Doc
+from amuse import AMuSE_WSD_online
 
-class Dataset_SRL_34(Dataset):
+class Dataset_Base(Dataset):
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.data[idx]
+
+class Dataset_SRL_34(Dataset_Base):
     def __init__(self, sentences: Dict[str, List[str]], need_train: bool, language: str):
         # if the dataset is for a model that need_train we assume to have labels
         self.has_labels = need_train 
@@ -48,16 +56,46 @@ class Dataset_SRL_34(Dataset):
                 data.append(item)               
         return data
 
-    def __len__(self):
-        return len(self.data)
+class Dataset_SRL_234(Dataset_Base):
+    def __init__(self, sentences: Dict[str, List[str]], need_train: bool, language: str, standard_dataset: bool = True):
+        # if the dataset is for a model that need_train we assume to have labels
+        self.has_labels = need_train 
+        self.language = language
+        self.standard_dataset = standard_dataset
+        self.frame_to_id, self.id_to_frame= Dataset_SRL_1234.create_frames_id_mapping()
+        self.data = self.make_data(sentences)
 
-    def __getitem__(self, idx):
-        return self.data[idx]
+    @staticmethod
+    def create_frames_id_mapping():
+        # these labels have been extracted studying the dataset from the notebook
+        frames_in_dataset = ['_', 'ASK_REQUEST', 'BENEFIT_EXPLOIT', 'PLAN_SCHEDULE', 'CARRY-OUT-ACTION', 'ESTABLISH', 'SIMPLIFY', 'PROPOSE', 'TAKE-INTO-ACCOUNT_CONSIDER', 'BEGIN', 'CIRCULATE_SPREAD_DISTRIBUTE', 'REFER', 'SHOW', 'PRECLUDE_FORBID_EXPEL', 'VIOLATE', 'VERIFY', 'CAUSE-SMT', 'ABSTAIN_AVOID_REFRAIN', 'TRANSMIT', 'SEE', 'SUMMON', 'GUARANTEE_ENSURE_PROMISE', 'RECEIVE', 'INCREASE_ENLARGE_MULTIPLY', 'DECREE_DECLARE', 'PAY', 'CAUSE-MENTAL-STATE', 'CAGE_IMPRISON', 'HURT_HARM_ACHE', 'MOVE-BACK', 'EXIST_LIVE', 'CALCULATE_ESTIMATE', 'ATTRACT_SUCK', 'EXIST-WITH-FEATURE', 'INFORM', 'EXPLAIN', 'SPEAK', 'SEEM', 'MISS_OMIT_LACK', 'DECIDE_DETERMINE', 'ASSIGN-SMT-TO-SMN', 'FOLLOW_SUPPORT_SPONSOR_FUND', 'MOVE-ONESELF', 'WORSEN', 'AMELIORATE', 'AGREE_ACCEPT', 'MOVE-SOMETHING', 'PUT_APPLY_PLACE_PAVE', 'ADJUST_CORRECT', 'INCLUDE-AS', 'CONTINUE', 'SPEED-UP', 'LOAD_PROVIDE_CHARGE_FURNISH', 'REMEMBER', 'FINISH_CONCLUDE_END', 'REPEAT', 'HELP_HEAL_CARE_CURE', 'IMPLY', 'OPPOSE_REBEL_DISSENT', 'STRENGTHEN_MAKE-RESISTANT', 'AROUSE_WAKE_ENLIVEN', 'RECORD', 'INCITE_INDUCE', 'GIVE_GIFT', 'DESTROY', 'REQUIRE_NEED_WANT_HOPE', 'ANALYZE', 'COME-AFTER_FOLLOW-IN-TIME', 'BELIEVE', 'GO-FORWARD', 'CANCEL_ELIMINATE', 'RECOGNIZE_ADMIT_IDENTIFY', 'CHOOSE', 'REPRESENT', 'TREAT', 'OBLIGE_FORCE', 'STOP', 'REACT', 'HAPPEN_OCCUR', 'OVERCOME_SURPASS', 'AFFECT', 'CREATE_MATERIALIZE', 'ALLY_ASSOCIATE_MARRY', 'MANAGE', 'OPEN', 'ORIENT', 'ANSWER', 'INFLUENCE', 'COMBINE_MIX_UNITE', 'LEAD_GOVERN', 'STAY_DWELL', 'WELCOME', 'AMASS', 'PREPARE', 'ORGANIZE', 'HAVE-A-FUNCTION_SERVE', 'GIVE-UP_ABOLISH_ABANDON', 'SORT_CLASSIFY_ARRANGE', 'GIVE-BIRTH', 'PUBLISH', 'USE', 'POSSESS', 'BEHAVE', 'WORK', 'SUBJECTIVE-JUDGING', 'APPROVE_PRAISE', 'ATTEND', 'LEAVE_DEPART_RUN-AWAY', 'CATCH', 'OBEY', 'SATISFY_FULFILL', 'UNDERSTAND', 'ACHIEVE', 'TRY', 'ATTACH', 'INTERPRET', 'DELAY', 'REDUCE_DIMINISH', 'UNDERGO-EXPERIENCE', 'RETAIN_KEEP_SAVE-MONEY', 'ARRIVE', 'REFUSE', 'IMAGINE', 'HARMONIZE', 'PARTICIPATE', 'HIRE', 'RESULT_CONSEQUENCE', 'FOCUS', 'CONTAIN', 'MOUNT_ASSEMBLE_PRODUCE', 'PROVE', 'WRITE', 'RESTRAIN', 'TOLERATE', 'ACCOMPANY', 'DISCUSS', 'RESTORE-TO-PREVIOUS/INITIAL-STATE_UNDO_UNWIND', 'TEACH', 'CHANGE-APPEARANCE/STATE', 'INVERT_REVERSE', 'RELY', 'SIGNAL_INDICATE', 'LEARN', 'ACCUSE', 'PERFORM', 'AFFIRM', 'REMOVE_TAKE-AWAY_KIDNAP', 'WATCH_LOOK-OUT', 'GROUND_BASE_FOUND', 'LEAVE-BEHIND', 'FACE_CHALLENGE', 'CHANGE_SWITCH', 'SHARE', 'APPLY', 'ARGUE-IN-DEFENSE', 'DIRECT_AIM_MANEUVER', 'WAIT', 'HEAR_LISTEN', 'CONSIDER', 'LIKE', 'FIGHT', 'PROTECT', 'AUTHORIZE_ADMIT', 'DIVERSIFY', 'PRESERVE', 'LOCATE-IN-TIME_DATE', 'SEND', 'ORDER', 'SEARCH', 'REGRET_SORRY', 'EMPHASIZE', 'CELEBRATE_PARTY', 'TAKE-SHELTER', 'HOST_MEAL_INVITE', 'REPLACE', 'THINK', 'MEET', 'PERCEIVE', 'BREAK_DETERIORATE', 'JOIN_CONNECT', 'BORDER', 'FIND', 'KNOW', 'KILL', 'CHARGE', 'FAIL_LOSE', 'CRITICIZE', 'CITE', 'HIT', 'LIBERATE_ALLOW_AFFORD', 'BRING', 'DERIVE', 'JUSTIFY_EXCUSE', 'PERSUADE', 'REVEAL', 'DRIVE-BACK', 'TAKE', 'OBTAIN', 'LOSE', 'ADD', 'MATCH', 'CONSUME_SPEND', 'COMPARE', 'BEFRIEND', 'NAME', 'BE-LOCATED_BASE', 'OFFER', 'OVERLAP', 'CARRY_TRANSPORT', 'REACH', 'FILL', 'ENCLOSE_WRAP', 'DISBAND_BREAK-UP', 'COUNT', 'DEFEAT', 'CO-OPT', 'ENDANGER', 'PUNISH', 'TRANSLATE', 'SECURE_FASTEN_TIE', 'INSERT', 'REMAIN', 'BUY', 'STEAL_DEPRIVE', 'SETTLE_CONCILIATE', 'EXTEND', 'SUMMARIZE', 'PUBLICIZE', 'CORRELATE', 'SEPARATE_FILTER_DETACH', 'GROUP', 'COST', 'ATTACK_BOMB', 'WARN', 'NEGOTIATE', 'ENTER', 'LIE', 'SPEND-TIME_PASS-TIME', 'EMPTY_UNLOAD', 'INVERT_REVERSE-', 'EMIT', 'TURN_CHANGE-DIRECTION', 'SELL', 'GUESS', 'DISCARD', 'CONTRACT-AN-ILLNESS_INFECT', 'WASH_CLEAN', 'DROP', 'OPERATE', 'SHARPEN', 'REFLECT', 'COMPENSATE', 'ASCRIBE', 'LOWER', 'COPY', 'DEBASE_ADULTERATE', 'DISMISS_FIRE-SMN', 'COVER_SPREAD_SURMOUNT', 'MEASURE_EVALUATE', 'RESIGN_RETIRE', 'READ', 'DISTINGUISH_DIFFER', 'TRAVEL', 'RESIST', 'SHOOT_LAUNCH_PROPEL', 'BURDEN_BEAR', 'SOLVE', 'WIN', 'APPEAR', 'FOLLOW-IN-SPACE', 'PULL', 'PAINT', 'COME-FROM', 'VISIT', 'COOL', 'DOWNPLAY_HUMILIATE', 'CHASE', 'EMBELLISH', 'EARN', 'RAISE', 'PROMOTE', 'MEAN', 'EXHAUST', 'ABSORB', 'PRESS_PUSH_FOLD', 'LEND', 'SHAPE', 'PRINT', 'REPAIR_REMEDY', 'GROW_PLOW', 'QUARREL_POLEMICIZE', 'TAKE-A-SERVICE_RENT', 'COMPETE', 'DIVIDE', 'COMMUNICATE_CONTACT', 'FIT', 'EXEMPT', 'SLOW-DOWN', 'FLOW', 'RISK', 'METEOROLOGICAL', 'NOURISH_FEED', 'STABILIZE_SUPPORT-PHYSICALLY']
+        return {lab: i for i, lab in enumerate(frames_in_dataset)}, {i: lab for i, lab in enumerate(frames_in_dataset)}
 
-# class Dataset_SRL_234(dataset_srl_34):
-#     pass
+    def make_data(self, sentences):
+        data = list() 
+        if (self.language == "EN" and self.standard_dataset):
+            # I load precomputed ones, my internet is slow and computing them takes to long
+            if "1996/a/50/18_supp__323:5" in sentences:
+                # I know that this idx is of an english training sentence
+                frames = torch.load("../../model/amuse/prediction_words_new_en")
+            else:
+                frames = torch.load("../../model/amuse/prediction_words_dev_new_en")
+        else:
+            amuse = AMuSE_WSD_online(self.language)
+            frames = amuse.predict(sentences, require_ids=True)
+        #we will use this value as index for oov predicates
+        max_frame = len(self.frame_to_id.keys())
+        for ids in sentences:
+            item = dict()
+            sentence_w = sentences[ids]["words"]
+            item["input"] = sentence_w
+            item['frames'] = [self.frame_to_id.get(i, max_frame) for i in frames[ids]['predicates']]
+            if self.has_labels:
+                item["labels"] = [self.frame_to_id.get(i, max_frame) for i in frames[ids]['predicates']]       
+            data.append(item)                      
+        return data
 
-class Dataset_SRL_1234(Dataset):
+class Dataset_SRL_1234(Dataset_Base):
     def __init__(self, sentences: Dict[str, List[str]], need_train: bool, language: str):
         # if the dataset is for a model that need_train we assume to have labels
         self.has_labels = need_train 
@@ -100,12 +138,6 @@ class Dataset_SRL_1234(Dataset):
             data.append(item)                      
         return data
 
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        return self.data[idx]
-
 class SRL_DataModule(pl.LightningDataModule):
     def __init__(self, hparams: dict, task: str, language: str, sentences: Dict[str, List[str]], sentences_test: Dict[str, List[str]] = None) -> None:
         super().__init__()
@@ -115,15 +147,16 @@ class SRL_DataModule(pl.LightningDataModule):
         assert(task in ["1234", "234", "34"])
         self.task = task
         self.language = language
-        self.collates = {"34": self.collate_fn_34, "1234": self.collate_fn_1234}
+        self.collates = {"34": self.collate_fn_34, "234": self.collate_fn_234, "1234": self.collate_fn_1234}
 
     def setup(self, stage: Optional[str] = None) -> None:
         
         if self.task == "34":
             self.tokenizer = AutoTokenizer.from_pretrained(self.hparams.language_model_name)
             DATASET = Dataset_SRL_34
-        # elif self.task == "234":
-        #     DATASET = Dataset_SRL_234
+        elif self.task == "234":
+            DATASET = Dataset_SRL_234
+            self.tokenizer = tre.Tokenizer(self.hparams.language_model_name)
         else:
             self.tokenizer = tre.Tokenizer(self.hparams.language_model_name)
             DATASET = Dataset_SRL_1234
@@ -155,7 +188,6 @@ class SRL_DataModule(pl.LightningDataModule):
                     pin_memory = True,
                     persistent_workers = True
                 )
-    
     # here we define our collate function to apply the padding
     def collate_fn_34(self, batch) -> Dict[str, torch.Tensor]:
         batch_out = self.tokenizer.batch_encode_plus(
@@ -190,17 +222,26 @@ class SRL_DataModule(pl.LightningDataModule):
         batch_out["word_id"] = torch.as_tensor(np.array(word_ids), dtype=torch.long) 
         return batch_out
 
+    def collate_fn_234(self, batch) -> Dict[str, torch.Tensor]:
+        return SRL_DataModule.common_collate(self, batch, "frames",self.hparams.n_frames)
+
+
     def collate_fn_1234(self, batch) -> Dict[str, torch.Tensor]:
+        return SRL_DataModule.common_collate(self, batch, "pos_tags", self.hparams.pos_tag_tokens)
+
+    @staticmethod
+    def common_collate(self, batch, padkey1: str, padding_value1: int):
+        # the last 2 collate_fn shares almost everything, so I collect the differences in this function
         batch_out = self.tokenizer(
             [sentence["input"] for sentence in batch],
             return_tensors = True,
             padding = True,
-            is_split_into_words=True
+            is_split_into_words = True
         )
-        batch_out["pos_tags"] = pad_sequence(
-                                    [torch.as_tensor(item["pos_tags"]) for item in batch],
+        batch_out[padkey1] = pad_sequence(
+                                    [torch.as_tensor(item[padkey1]) for item in batch],
                                     batch_first=True,
-                                    padding_value=self.hparams.pos_tag_tokens
+                                    padding_value=padding_value1
                                 )
         if self.hparams.need_train:
             batch_out["labels"] = pad_sequence(
