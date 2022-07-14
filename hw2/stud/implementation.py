@@ -19,6 +19,12 @@ import spacy
 from spacy.tokens import Doc
 from utils import evaluate_predicate_disambiguation, evaluate_predicate_identification
 from utils import evaluate_argument_classification, evaluate_argument_identification
+import csv
+import requests
+import json
+from tqdm import tqdm
+import copy
+
 # all "package relative imports" here, to avoid repeat code in the notebook as I did for hw1
 try:
     from .datasets_srl import Dataset_SRL_34, Dataset_SRL_1234  # NOTE: relative import to work with docker
@@ -113,34 +119,8 @@ class StudentModel(Model):
     def predict(self, sentence):
         if self.model is None:
             if self.hparams.task == "34":
-                self.model = SRL_34.load_from_checkpoint(f"model/SRL_{self.hparams.task}_{self.hparams.language}", strict=False).to(self.device)
+                self.model = SRL_34.load_from_checkpoint(f"model/SRL_34_{self.hparams.language}", strict=False).to(self.device)
         return self.model.predict(sentence)
-        """
-        --> !!! STUDENT: implement here your predict function !!! <--
-
-        Args:
-            sentence: a dictionary that represents an input sentence, for example:
-                - If you are doing argument identification + argument classification:
-                - If you are doing predicate disambiguation + argument identification + argument classification:
-                    {
-                        "words": [...], # SAME AS BEFORE
-                        "lemmas": [...], # SAME AS BEFORE
-                        "predicates":
-                            [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0 ],
-                    },
-                - If you are doing predicate identification + predicate disambiguation + argument identification + argument classification:
-
-        Returns:
-            A dictionary with your predictions:
-                - If you are doing argument identification + argument classification:
-                    
-                - If you are doing predicate disambiguation + argument identification + argument classification:
-                    {
-                        "predicates": list, # A list with your predicted predicate senses, one for each token in the input sentence.
-                        "roles": dictionary of lists, # A list of roles for each pre-identified predicate (index) in the sentence.
-                    }
-                - If you are doing predicate identification + predicate disambiguation + argument identification + argument classification:
-        """
 
 class SRL_34(pl.LightningModule):
     def __init__(self, hparams: dict, sentences_for_evaluation=None) -> None:
@@ -241,7 +221,7 @@ class SRL_34(pl.LightningModule):
         self.log_dict({"avg_val_loss": avg_loss})
         return {"avg_val_loss": avg_loss}
 
-    def predict(self, sentences, require_ids = False):
+    def predict(self, sentences: Dict[str, List[str]], require_ids = False):
         """
             INPUT:
             - sentence:
@@ -390,7 +370,7 @@ class SRL_1234(pl.LightningModule):
         self.log_dict({"avg_val_loss": avg_loss})
         return {"avg_val_loss": avg_loss}
 
-    def predict(self, sentences, require_ids = False, training = False):
+    def predict(self, sentences: Dict[str, List[str]], require_ids = False, training = False):
         """
             INPUT:
             - sentence:
@@ -445,9 +425,7 @@ class SRL_1234(pl.LightningModule):
             input = encode_sentence(self, sentence).to(self.device)
             output = self(input)
             predict["predicates"] = torch.round(output).view(-1).int().tolist()
-            if not training:
-                a = None
-            else:
+            if training:
                 predict["predicates"] = ["_" if p == 0 else "1" for p in predict["predicates"]]
             return predict
 
@@ -463,3 +441,89 @@ class SRL_1234(pl.LightningModule):
             for id in sentences:
                 predictions[id] = predict_roles(self, sentences[id], training)
             return predictions
+
+class SRL_234():
+    def __init__(self, hparams: dict) -> None:
+        # ok, there are many possible ways to solve this task, the most efficient are very
+        # similar to the other 2 I've implemented, so I've decided to work on this extra to do the simplest
+        # thing possible: I let AMuSE-WSD do the work. Given the predicted sense is possible to encode this
+        # information to use a neural network or any machine learning model properly fitted. 
+        def read_in_dict(in_file: str):
+            with open(in_file) as file:
+                tsv_file = csv.reader(file, delimiter="\t")
+                dict = {}
+                for line in tsv_file:
+                    key, val = line[0], line[1]
+                    dict[key] = val
+            return dict
+        bn2va_file = "../../model/VA_bn2va.tsv"
+        va_info_file = "../../model/VA_frame_info.tsv"
+        # convert from bn synset to verbatlas frame
+        self.bn2va = read_in_dict(bn2va_file)
+        # retrive the sense from verbatlas frame
+        self.va_info = read_in_dict(va_info_file)
+        self.url = 'http://nlp.uniroma1.it/amuse-wsd/api/model'
+        self.headers = {'accept': 'application/json', 'Content-Type': 'application/json'}
+        self.language = hparams["language"]
+        if not hparams["need_train"]:
+            self.layer = torch.load("model/SRL_234_layer2.ckpt")
+        self.hparams = hparams
+
+    def use_AMuSE_WSD(self, sentence: Dict[str, List[str]]):
+        # http://nlp.uniroma1.it/amuse-wsd/api-documentation
+        stringa = " ".join(sentence["lemmas"])
+        dict =  [{"text": stringa, "lang" : self.language}]
+        payload = json.dumps(dict)
+        r = requests.post( self.url, data=payload, headers=self.headers)
+        sol = r.json()[0]['tokens']
+        senses = list()
+        for i, n in enumerate(sentence["predicates"]):
+            if n == 0:
+                senses.append("_")
+            else:
+                bn_id = sol[i]["bnSynsetId"]
+                if bn_id not in self.bn2va:
+                    # if we have a "noun prediction" it's clearly not a verb
+                    senses.append("_")
+                    continue
+                vf_from_bn = self.bn2va[bn_id]
+                senses.append(self.use_filtered_predictions(vf_from_bn))
+        return {"predicates" : senses}
+
+    def use_filtered_predictions(self,vf_from_bn):
+        if hasattr(self, 'filter') and self.va_info[vf_from_bn] in self.filter:
+            return self.filter[self.va_info[vf_from_bn]]
+        else:
+            return self.va_info[vf_from_bn]
+
+    def predict(self, sentences: Dict[str, List[str]], require_ids = False, simple = True):
+        """
+        INPUT:
+        {
+            "words": [...], # SAME AS BEFORE
+            "lemmas": [...], # SAME AS BEFORE
+            "predicates":
+                [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0 ],
+        }
+        OUTPUT:
+        {
+            "predicates": list, # A list with your predicted predicate senses, one for each token in the input sentence.
+            "roles": dictionary of lists, # A list of roles for each pre-identified predicate (index) in the sentence.
+        }
+        """
+        if not require_ids:
+            amuse_pred = self.use_AMuSE_WSD(sentences)
+            sentences["predicates"] = amuse_pred
+            if not hasattr(self, 'srl34'):
+                self.srl34 = SRL_34.load_from_checkpoint(f"model/SRL_34_{self.hparams.language}", strict=False).to(self.device)
+            return self.srl34.predict(sentences)
+        # ELSE    
+        predictions = dict()
+        # need a copy to avoid side effects
+        sentences2 = copy.deepcopy(sentences)
+        for id in tqdm(sentences2):
+            # NOTE: tqdm not in the other predicts since it breaks the training prints
+            sentences2[id]["predicates"] = [0 if i == '_' else 1 for i in sentences2[id]["predicates"]]
+            # here as always "private" evaluation
+            predictions[id] = self.use_AMuSE_WSD(sentences2[id])
+        return predictions
