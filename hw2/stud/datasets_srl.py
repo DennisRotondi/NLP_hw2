@@ -8,7 +8,11 @@ import transformers_embedder as tre
 import numpy as np
 import spacy
 from spacy.tokens import Doc
-from amuse import AMuSE_WSD_online
+# all "package relative imports" here, to avoid repeat code in the notebook as I did for hw1
+try:
+    from .amuse import AMuSE_WSD_online
+except:
+    from amuse import AMuSE_WSD_online
 
 class Dataset_Base(Dataset):
     def __len__(self):
@@ -62,7 +66,7 @@ class Dataset_SRL_234(Dataset_Base):
         self.has_labels = need_train 
         self.language = language
         self.standard_dataset = standard_dataset
-        self.frame_to_id, self.id_to_frame= Dataset_SRL_1234.create_frames_id_mapping()
+        self.frame_to_id, self.id_to_frame= Dataset_SRL_234.create_frames_id_mapping()
         self.data = self.make_data(sentences)
 
     @staticmethod
@@ -77,21 +81,23 @@ class Dataset_SRL_234(Dataset_Base):
             # I load precomputed ones, my internet is slow and computing them takes to long
             if "1996/a/50/18_supp__323:5" in sentences:
                 # I know that this idx is of an english training sentence
-                frames = torch.load("../../model/amuse/prediction_words_new_en")
+                frames = torch.load("../../model/amuse/prediction_words_new_EN")
             else:
-                frames = torch.load("../../model/amuse/prediction_words_dev_new_en")
+                frames = torch.load("../../model/amuse/prediction_words_dev_new_EN")
         else:
             amuse = AMuSE_WSD_online(self.language)
             frames = amuse.predict(sentences, require_ids=True)
         #we will use this value as index for oov predicates
-        max_frame = len(self.frame_to_id.keys())
         for ids in sentences:
+            # if ids ==  "2003/a/58/562_24:1":
+            #     continue
             item = dict()
-            sentence_w = sentences[ids]["words"]
-            item["input"] = sentence_w
-            item['frames'] = [self.frame_to_id.get(i, max_frame) for i in frames[ids]['predicates']]
+            item["input"] = sentences[ids]["words"]
+            # we punt a random pred if OOV 
+            item['frames'] = [self.frame_to_id.get(i, 1) for i in frames[ids]['predicates']]
+            assert(len(item["input"]) == len(item["frames"]))
             if self.has_labels:
-                item["labels"] = [self.frame_to_id.get(i, max_frame) for i in frames[ids]['predicates']]       
+                item["labels"] = [self.frame_to_id.get(i, -100) for i in sentences[ids]['predicates']]       
             data.append(item)                      
         return data
 
@@ -170,7 +176,7 @@ class SRL_DataModule(pl.LightningDataModule):
         return DataLoader(
                 self.data_train, 
                 batch_size = self.hparams.batch_size, 
-                shuffle = self.hparams.need_train, # if we need train we shuffle it
+                shuffle = True,
                 num_workers = self.hparams.n_cpu,
                 collate_fn = self.collates[self.task],
                 pin_memory = True,
@@ -223,8 +229,7 @@ class SRL_DataModule(pl.LightningDataModule):
         return batch_out
 
     def collate_fn_234(self, batch) -> Dict[str, torch.Tensor]:
-        return SRL_DataModule.common_collate(self, batch, "frames",self.hparams.n_frames)
-
+        return SRL_DataModule.common_collate(self, batch, "frames", self.hparams.n_frames)
 
     def collate_fn_1234(self, batch) -> Dict[str, torch.Tensor]:
         return SRL_DataModule.common_collate(self, batch, "pos_tags", self.hparams.pos_tag_tokens)

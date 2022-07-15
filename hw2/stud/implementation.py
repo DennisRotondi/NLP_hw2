@@ -1,3 +1,4 @@
+from asyncio import tasks
 import json
 from os import device_encoding
 import random
@@ -19,14 +20,15 @@ import spacy
 from spacy.tokens import Doc
 from utils import evaluate_predicate_disambiguation, evaluate_predicate_identification
 from utils import evaluate_argument_classification, evaluate_argument_identification
-from amuse import AMuSE_WSD_online
 
 # all "package relative imports" here, to avoid repeat code in the notebook as I did for hw1
 try:
-    from .datasets_srl import Dataset_SRL_34, Dataset_SRL_1234  # NOTE: relative import to work with docker
+    from .datasets_srl import Dataset_SRL_34, Dataset_SRL_234, Dataset_SRL_1234  # NOTE: relative import to work with docker
+    from .amuse import AMuSE_WSD_online
 except:
     print("working with notebook need an 'absolute' import")
-    from datasets_srl import Dataset_SRL_34, Dataset_SRL_1234
+    from datasets_srl import Dataset_SRL_34, Dataset_SRL_234, Dataset_SRL_1234
+    from amuse import AMuSE_WSD_online
 
 
 def build_model_34(language: str, device: str) -> Model:
@@ -55,7 +57,7 @@ def build_model_234(language: str, device: str) -> Model:
             3: Argument identification.
             4: Argument classification.
     """
-    raise StudentModel(language=language, device=device, task="234")
+    return StudentModel(language=language, device=device, task="234")
 
 
 def build_model_1234(language: str, device: str) -> Model:
@@ -71,18 +73,18 @@ def build_model_1234(language: str, device: str) -> Model:
             3: Argument identification.
             4: Argument classification.
     """
-    raise StudentModel(language=language, device=device, task="1234")
+    return StudentModel(language=language, device=device, task="1234")
 
 @dataclass
 class HParams():
     # dataset stuff
     need_train: bool = True
-    batch_size: int = 128 #128 for 1234, 256 for 34
+    batch_size: int = 256 #128 for 1234, 256 for 34, 130 for 234
     n_cpu: int = 8
     role_classes: int = 27 # number of different SRL roles for this homework
     pos_tag_tokens: int = 17
     n_frames: int = 303
-    # model stuff
+    # models stuff
     language_model_name: str = "bert-base-uncased" #"bert-base-multilingual-cased"
     lr: int = 1e-3
     wd: int = 0
@@ -91,8 +93,9 @@ class HParams():
     bidirectional: bool = True 
     num_layers: int = 1
     dropout: float = 0.3
-    trainable_embeddings: bool = True 
+    trainable_embeddings: bool = False 
     pos_tag_emb_dim: int = 232
+    frames_emb_dim: int = 232
     language: str = "EN"
     task: str = "34"
 
@@ -105,25 +108,30 @@ class StudentModel(Model):
     def __init__(self, language: str, device: str, task: str):
         # load the specific model for the input language
         self.device = device
-        hparams = HParams()
-        hparams.need_train = False
-        hparams.language = language
-        hparams.task = task
-        hparams.trainable_embeddings = False
-        self.hparams = hparams
+        self.language = language
+        self.task = task
         # this has been a common problem between us students, we need to init rapidly the student model
         # so for now we set the model to None and at prediction time we upload it! Also useful to generalize the task
         self.model = None 
     def predict(self, sentence):
         if self.model is None:
-            if self.hparams.task == "34":
-                self.model = SRL_34.load_from_checkpoint(f"model/SRL_34_{self.hparams.language}.ckpt", strict=False).to(self.device)
-            elif self.hparams.task == "234":
-                self.model = SRL_234.load_from_checkpoint(f"model/SRL_234_{self.hparams.language}.ckpt", strict=False).to(self.device)
-            elif self.hparams.task == "1234":
-                self.model = SRL_1234.load_from_checkpoint(f"model/SRL_1234_{self.hparams.language}.ckpt", strict=False).to(self.device)
+            self.model = load_from_checkpoint_stud(self.task, self.language, self.device)
         return self.model.predict(sentence)
 # functions in common between models
+
+def load_from_checkpoint_stud(task: str, language: str, device: str):
+    assert(task in ["34", "234", "1234"])
+    assert(language in ["EN", "ES", "FR"])
+    parameters = {"need_train": False, "trainable_embeddings": False, "task": task, "language": language}
+    if task == "34":
+        model = SRL_34.load_from_checkpoint(f"model/SRL_34_{language}.ckpt", **parameters, strict=False).to(device)
+    elif task == "234":
+        model = SRL_234.load_from_checkpoint(f"model/SRL_234_{language}.ckpt", **parameters, strict=False).to(device)
+    else:
+        model = SRL_1234.load_from_checkpoint(f"model/SRL_1234_{language}.ckpt", **parameters, strict=False).to(device)
+            # we get rid of some field and set the correct task/language.
+    return model
+
 class SRL_Base(pl.LightningModule):
     def __init__(self) -> None:
         super(SRL_Base, self).__init__()
@@ -201,7 +209,7 @@ class SRL_34(SRL_Base):
 
     def loss_function(self, predictions, labels):
         identification = predictions["id"]
-        predictions = predictions["class"].view(-1, predictions.shape[-1])
+        predictions = predictions["class"].view(-1, predictions["class"].shape[-1])
         labels = labels.view(-1)
         CE = F.cross_entropy(predictions, labels, ignore_index = -100)
 
@@ -294,6 +302,8 @@ class SRL_234(SRL_Base):
         self.save_hyperparameters(hparams)
         if sentences_for_evaluation is not None:
             self.sentences_for_evaluation = sentences_for_evaluation
+            # we also load the corresponding amuse prediction, to avoid internet bottleneck
+            self.sentences_wsd = torch.load(f"../../model/amuse/prediction_words_dev_new_{self.hparams.language}")
         self.transformer_model = TransformersEmbedder(
                                  self.hparams.language_model_name,
                                  subword_pooling_strategy="sparse", 
@@ -305,10 +315,9 @@ class SRL_234(SRL_Base):
             for i in unfreeze:
                 for param in self.transformer_model.transformer_model.encoder.layer[i].parameters():
                     param.requires_grad = True
-        # we will use as padding idx the highest id
-        nframes = self.hparams.nframes+1
-        frames_emb_dim = self.hparams.pos_tag_emb_dim
-        self.frames_embed = nn.Embedding(nframes, frames_emb_dim, padding_idx=self.hparams.nframes)
+        n_frames = self.hparams.n_frames+1 
+        frames_emb_dim = self.hparams.frames_emb_dim
+        self.frames_embed = nn.Embedding(n_frames, frames_emb_dim, padding_idx=self.hparams.n_frames)
         self.dropout = nn.Dropout(self.hparams.dropout)
         self.lstm = nn.LSTM(self.hparams.embedding_dim+frames_emb_dim, self.hparams.hidden_dim, 
                             bidirectional=self.hparams.bidirectional,
@@ -316,7 +325,13 @@ class SRL_234(SRL_Base):
                             dropout = self.hparams.dropout if self.hparams.num_layers > 1 else 0,
                             batch_first=True)
         lstm_output_dim = self.hparams.hidden_dim if self.hparams.bidirectional is False else self.hparams.hidden_dim * 2
-        self.classifier = nn.Linear(lstm_output_dim, self.hparams.nframes)
+        self.classifier = nn.Linear(lstm_output_dim, self.hparams.n_frames)
+        # this was an experiment
+        # self.classifier = nn.Sequential(
+        #                         nn.Linear(lstm_output_dim, int(lstm_output_dim/2)),
+        #                         nn.ReLU(),
+        #                         nn.Linear(int(lstm_output_dim/2), self.hparams.n_frames)
+        #                     )
         # the tokenizer here is useful to speedup the prediction process!
         self.tokenizer = tre.Tokenizer(self.hparams.language_model_name)
 
@@ -337,7 +352,7 @@ class SRL_234(SRL_Base):
 
     def validation_epoch_end(self, outputs: List[Dict[str, torch.Tensor]]):
         avg_loss = torch.stack([x["loss_val"] for x in outputs]).mean()
-        predict = self.predict(self.sentences_for_evaluation, require_ids=True, training=True)
+        predict = self.predict(self.sentences_for_evaluation, require_ids=True)
         pc = evaluate_predicate_disambiguation(self.sentences_for_evaluation, predict)
         pc_d = dict()
         for key in pc:
@@ -347,7 +362,7 @@ class SRL_234(SRL_Base):
         self.log_dict({"avg_val_loss": avg_loss})
         return {"avg_val_loss": avg_loss}
 
-    def predict(self, sentences: Dict[str, List[str]], require_ids = False, training = False):
+    def predict(self, sentences: Dict[str, List[str]], require_ids = False):
         """
             INPUT:
             - sentence:
@@ -372,55 +387,48 @@ class SRL_234(SRL_Base):
         # even if with the docker we have a sentence at a time, I decided to do a "batch" approach to be able to compute all the metrics
         # at training time easily exploiting the utils functions of this homework.
         # those two functions allows me to encapsulate the prediction functions
-        def encode_sentence(self, sentence: List[str]):
-            # this is in brief what we do in the training time, since we are working with
-            # a sentence at a time this is the best way to proceed I've thought about.
+        def encode_sentence(self, sentence: List[str], id: int = None):
             input = sentence["words"]
             # print(input)
             batch_out = self.tokenizer(
                         [input],
                         return_tensors = True,
                         is_split_into_words=True
-                    )        
-            ###
-            # NOTE: there is at least a sentence 2003/a/58/562_24:1 with a '' token, I think this is a bug but since
-            # I'm not allowed to change the dataset I have to manually replace it with a " "
-            try:
-                sentence = Doc(self.nlp.vocab, input)
-            except:
-                # we have to fix '' bug
-                input = [w if w != '' else " " for w in input]
-                sentence = Doc(self.nlp.vocab, input)
-            doc = self.nlp(sentence)
-            pos_tags = list()
-            for token in doc:
-                pos_tags.append(self.tags_to_id[token.pos_] if token.pos_ != "SPACE" else self.tags_to_id["PUNCT"])
-            batch_out["pos_tags"] = torch.as_tensor([pos_tags])
+                    )     
+            if id is not None and self.hparams.need_train:
+                pred = self.sentences_wsd[id]["predicates"]
+            else:
+                pred = self.amuse.predict(sentence)["predicates"]    
+            #we will use this value as index for oov predicates
+            frames = [self.frame_to_id.get(i, 1) for i in pred]   
+            batch_out["frames"] = torch.as_tensor([frames])
             return batch_out
         
-        def predict_roles(self, sentence: List[str], training = False):
-            predict = dict()
-            input = encode_sentence(self, sentence).to(self.device)
-            output = self(input)
-            predict["predicates"] = torch.round(output).view(-1).int().tolist()
-            if training:
-                predict["predicates"] = ["_" if p == 0 else "1" for p in predict["predicates"]]
-                return predict
-            if not hasattr(self, 'srl234'):
-                self.srl234 = AMuSE_WSD_online(self.hparams.language)
-            sentence["predicates"] = predict["predicates"]
-            return self.srl234.predict(sentences)
+        def predict_pred_roles(self, sentence: List[str], id: int = None):
+                input = encode_sentence(self, sentence, id).to(self.device)
+                output = self(input)
+                output = torch.argmax(output,-1)[0].tolist()
+                predict = dict()
+                predict["predicates"] = [self.id_to_frame[i] for i in output]
+                if id:
+                    return predict
+                if not hasattr(self, 'srl34'):
+                    self.srl34 = load_from_checkpoint_stud("34",self.hparams.language,self.device)
+                sentence["predicates"] = predict["predicates"]
+                res = self.srl34.predict(sentence)
+                res["predicates"] = predict["predicates"]
+                return res
         self.eval()
-        if not hasattr(self, 'nlp'):
-            taggers = {"EN":"en_core_web_sm", "ES":"es_core_news_sm", "FR":"fr_core_news_sm"}
-            self.nlp = spacy.load(taggers[self.hparams.language])
-            self.tags_to_id, _ = Dataset_SRL_1234.create_ptag_id_mapping()
+        if not hasattr(self, 'amuse'):
+            self.amuse = AMuSE_WSD_online(self.hparams.language, notebook=self.hparams.need_train)
+            self.frame_to_id, self.id_to_frame= Dataset_SRL_234.create_frames_id_mapping()
+
         with torch.no_grad():
             if not require_ids:
-                return predict_roles(self, sentences, training)
+                return predict_pred_roles(self, sentences)
             predictions = dict()
             for id in sentences:
-                predictions[id] = predict_roles(self, sentences[id], training)
+                predictions[id] = predict_pred_roles(self, sentences[id], id)
             return predictions
 
 class SRL_1234(SRL_Base):
@@ -487,7 +495,7 @@ class SRL_1234(SRL_Base):
         self.log_dict({"avg_val_loss": avg_loss})
         return {"avg_val_loss": avg_loss}
 
-    def predict(self, sentences: Dict[str, List[str]], require_ids = False, training = False):
+    def predict(self, sentences: Union[List[str], Dict[str, List[str]]], require_ids = False, training = False):
         """
             INPUT:
             - sentence:
@@ -508,9 +516,6 @@ class SRL_1234(SRL_Base):
                 or a dict of them with key the id of the sentence if require_ids is True.
                 if training is set to True it will return a 0-1 encoding to indicate the predicate
         """
-        # even if with the docker we have a sentence at a time, I decided to do a "batch" approach to be able to compute all the metrics
-        # at training time easily exploiting the utils functions of this homework.
-        # those two functions allows me to encapsulate the prediction functions
         def encode_sentence(self, sentence: List[str]):
             # this is in brief what we do in the training time, since we are working with
             # a sentence at a time this is the best way to proceed I've thought about.
@@ -539,6 +544,8 @@ class SRL_1234(SRL_Base):
         
         def predict_roles(self, sentence: List[str], training = False):
             predict = dict()
+            # if training:
+            #     input = 
             input = encode_sentence(self, sentence).to(self.device)
             output = self(input)
             predict["predicates"] = torch.round(output).view(-1).int().tolist()
@@ -546,10 +553,9 @@ class SRL_1234(SRL_Base):
                 predict["predicates"] = ["_" if p == 0 else "1" for p in predict["predicates"]]
                 return predict
             if not hasattr(self, 'srl234'):
-                self.srl234 = SRL_234.load_from_checkpoint(f"model/SRL_234_{self.hparams.language}.ckpt", strict=False).to(self.device)
+                self.srl234 = load_from_checkpoint_stud("234",self.hparams.language,self.device)
             sentence["predicates"] = predict["predicates"]
             return self.srl234.predict(sentences)
-        
         self.eval()
         if not hasattr(self, 'nlp'):
             taggers = {"EN":"en_core_web_sm", "ES":"es_core_news_sm", "FR":"fr_core_news_sm"}
