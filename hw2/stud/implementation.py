@@ -541,6 +541,7 @@ class SRL_1234(SRL_Base):
             doc = self.nlp(sentence)
             pos_tags = list()
             for token in doc:
+                # we do not use space token in our labels, we just set it to spaces
                 pos_tags.append(self.tags_to_id[token.pos_] if token.pos_ != "SPACE" else self.tags_to_id["PUNCT"])
             batch_out["pos_tags"] = torch.as_tensor([pos_tags])
             return batch_out
