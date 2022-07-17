@@ -53,7 +53,8 @@ class Dataset_SRL_34(Dataset_Base):
                 item["input"] = (sentence_l, [sentence_l[predicate_position], sentences[ids]["predicates"][predicate_position]])
                 if self.has_labels:
                     # the desired output are the labels already encoded for each role associated to the sentence[predicate_position]
-                    item["role_labels"] = [self.labels_to_id[i] for i in sentences[ids]["roles"][predicate_position]]
+                    # there is a problem in the french dataset since a label is attriute instead of attribute
+                    item["role_labels"] = [self.labels_to_id[i] for i in sentences[ids]["roles"][predicate_position] if i != 'attriute']
                     # note that input and output have different sizes after the input embedding if a word_piece tokenizer is used
                     # (as in my case), but don't worry, the model will produce an average mean of piece_tokens so that the sizes
                     # will be compatible.
@@ -77,13 +78,13 @@ class Dataset_SRL_234(Dataset_Base):
 
     def make_data(self, sentences):
         data = list() 
-        if (self.language == "EN" and self.standard_dataset):
+        if self.standard_dataset:
             # I load precomputed ones, my internet is slow and computing them takes to long
-            if "1996/a/50/18_supp__323:5" in sentences:
+            if "1996/a/50/18_supp__323:5" in sentences or "1996/a/50/18_supp__323:5" in sentences:
                 # I know that this idx is of an english training sentence
-                frames = torch.load("../../model/amuse/prediction_words_new_EN")
+                frames = torch.load(f"../../model/amuse/prediction_words_new_{self.language}")
             else:
-                frames = torch.load("../../model/amuse/prediction_words_dev_new_EN")
+                frames = torch.load(f"../../model/amuse/prediction_words_dev_new_{self.language}")
         else:
             amuse = AMuSE_WSD_online(self.language)
             frames = amuse.predict(sentences, require_ids=True)
